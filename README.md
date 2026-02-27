@@ -33,21 +33,62 @@ python -m pip install -r requirements.txt
 python convert_tiff_to_vector_pdf.py --input 444924.tif --output 444924_vector.pdf
 ```
 
-Optional tuning:
+### Optional tuning parameters
 
-- `--threshold 0..255` to force binarization threshold (default uses Otsu)
-- `--invert` if your source is white linework on dark background
-- `--width-scale` to globally thicken/thin output strokes
-- `--min-width-px` and `--max-width-px` to clamp width range
-- `--width-delta-px` split connected paths only when width changes materially
-- `--min-run-nodes` avoid over-splitting from local width noise
-- `--simplify-epsilon-px` mild geometry simplification (0 disables)
+#### `--threshold`
 
-Current defaults are tuned for longer connected chains:
+Controls how the grayscale image is split into "ink" vs "background." Every pixel with a brightness at or below this value is treated as ink (line work). When omitted, the script automatically picks the best split point using Otsu's method, which analyzes the image histogram to maximize contrast between the two groups. You usually only need to set this manually if Otsu's auto-detection is picking up too much noise or missing faint lines.
 
-- `--width-delta-px 2.5`
-- `--min-run-nodes 40`
-- `--simplify-epsilon-px 0.8`
+- **Default:** automatic (Otsu's method)
+- **Range:** `0` - `255` (integer). `0` = only pure-black pixels are ink; `255` = almost everything is ink.
+
+#### `--invert`
+
+A simple on/off flag (no value needed). Use this when your source TIFF has **white lines on a dark background** instead of the usual dark lines on a light background. When set, pixels *brighter* than the threshold are treated as ink rather than pixels darker than the threshold.
+
+- **Default:** off (dark ink on light background)
+
+#### `--width-scale`
+
+A multiplier applied to every computed stroke width in the output PDF. The script estimates each line's thickness from the original raster; this factor scales that estimate up or down uniformly across the entire drawing. Use a value greater than 1.0 to make all output strokes thicker, or less than 1.0 to make them thinner.
+
+- **Default:** `1.0` (no scaling — widths match the original raster)
+- **Range:** any value `> 0` (e.g., `0.5` = half thickness, `2.0` = double thickness)
+
+#### `--min-width-px`
+
+The minimum allowed stroke width, measured in source-image pixels. Any line thinner than this value in the original image will be drawn at this width instead. This prevents extremely thin lines from disappearing or becoming too faint in the PDF.
+
+- **Default:** `0.75` px
+- **Range:** any value `> 0`
+
+#### `--max-width-px`
+
+The maximum allowed stroke width, measured in source-image pixels. Any line thicker than this value in the original image will be capped at this width. This prevents large filled regions from producing unreasonably wide strokes.
+
+- **Default:** `30.0` px
+- **Range:** any value `> 0` (must be ≥ `--min-width-px`)
+
+#### `--width-delta-px`
+
+Controls when the script splits a continuous centerline path into separate segments because the line thickness is changing. As the script walks along a skeleton path, it compares the estimated width at each point to the previous point. When the width difference between two adjacent points reaches this value (in source-image pixels), a new segment begins so each piece can have its own uniform stroke width in the PDF. **Lower values** produce more splits and more accurate per-segment widths, but create a larger PDF with more path objects. **Higher values** keep longer connected paths but average out width variations over longer stretches.
+
+- **Default:** `2.5` px
+- **Range:** any value `> 0`
+
+#### `--min-run-nodes`
+
+The minimum number of skeleton points a segment must contain before the script is allowed to split it due to a width change. This prevents the script from creating lots of tiny path fragments in areas where the line width fluctuates rapidly over short distances (e.g., at junctions or near text). **Higher values** force longer unbroken segments and reduce over-splitting from local width noise. **Lower values** (down to the minimum of 2) allow the script to split more aggressively for tighter width accuracy.
+
+- **Default:** `40` nodes
+- **Range:** any integer `≥ 2`
+
+#### `--simplify-epsilon-px`
+
+Controls how aggressively the script simplifies the geometry of each centerline path using the Ramer-Douglas-Peucker algorithm. This value is the maximum allowed perpendicular deviation, in source-image pixels, between the simplified path and the original skeleton points. **Larger values** remove more points and produce a smaller PDF, but the paths will be less precise. **Smaller values** keep more detail. Setting this to `0` disables simplification entirely, preserving every single skeleton pixel as a path vertex (largest possible PDF).
+
+- **Default:** `0.8` px
+- **Range:** any value `≥ 0` (`0` = no simplification)
 
 Example:
 
