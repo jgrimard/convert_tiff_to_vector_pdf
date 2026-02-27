@@ -129,6 +129,37 @@ def _load_single_page_tiff(path: Path) -> tuple[np.ndarray, tuple[float, float]]
 
 
 # ---------------------------------------------------------------------------
+# Auto-Detection of Inversion
+# ---------------------------------------------------------------------------
+def _auto_detect_invert(gray: np.ndarray, threshold: int) -> bool:
+    """
+    Determine whether the image has a dark background (and therefore needs
+    inversion) by comparing the proportion of dark pixels to light pixels.
+
+    Uses the binarization threshold as the dividing line: pixels at or below
+    the threshold are considered dark, pixels above are considered light.
+    If more than 50% of pixels are dark, the image likely has a dark
+    background with light line work, so inversion is recommended.
+
+    Parameters:
+        gray:      8-bit grayscale image array.
+        threshold: The binarization threshold (0-255).
+
+    Returns:
+        True if the image should be inverted, False otherwise.
+    """
+    total_pixels = gray.size
+    dark_pixels = int(np.count_nonzero(gray <= threshold))
+    dark_ratio = dark_pixels / total_pixels
+    print(
+        f"       Auto-invert: {dark_ratio:.1%} of pixels are dark "
+        f"-> {'inverting' if dark_ratio > 0.5 else 'no inversion'}",
+        end="",
+        flush=True,)
+    return dark_ratio > 0.5
+
+
+# ---------------------------------------------------------------------------
 # Binarization (converting grayscale to a True/False ink mask)
 # ---------------------------------------------------------------------------
 def _binarize(gray: np.ndarray, threshold: int | None, invert: bool) -> np.ndarray:
@@ -613,7 +644,7 @@ def convert_tiff_to_vector_pdf(
     input_tiff: Path,
     output_pdf: Path,
     threshold: int | None,
-    invert: bool,
+    invert: str,
     width_scale: float,
     min_width_px: float,
     max_width_px: float,
@@ -629,7 +660,8 @@ def convert_tiff_to_vector_pdf(
         input_tiff:           Path to the source TIFF file.
         output_pdf:           Path where the vector PDF will be written.
         threshold:            Binarization threshold (0-255), or None for Otsu.
-        invert:               If True, treat bright pixels as ink.
+        invert:               "auto" to detect automatically, "true" to force
+                              inversion, or "false" to force no inversion.
         width_scale:          Multiplier for estimated line widths.
         min_width_px:         Minimum stroke width in pixels.
         max_width_px:         Maximum stroke width in pixels.
@@ -649,7 +681,14 @@ def convert_tiff_to_vector_pdf(
 
     # --- Step 2: Binarize the grayscale image into an ink mask ---
     t = _step("[2/7] Binarizing...")
-    ink = _binarize(gray, threshold=threshold, invert=invert)
+    # Resolve the invert setting: auto-detect based on dark/light pixel ratio,
+    # or use the explicit true/false override provided by the user.
+    use_threshold = _otsu_threshold(gray) if threshold is None else int(threshold)
+    if invert == "auto":
+        should_invert = _auto_detect_invert(gray, use_threshold)
+    else:
+        should_invert = invert == "true"
+    ink = _binarize(gray, threshold=threshold, invert=should_invert)
     _done(t)
 
     if not np.any(ink):
@@ -780,8 +819,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--invert",
-        action="store_true",
-        help="Treat bright pixels as line work if your TIFF has white lines on dark background.",
+        type=str,
+        default="auto",
+        choices=["auto", "true", "false"],
+        help=(
+            "Control color inversion. 'auto' (default) detects whether the image "
+            "has a dark or light background and inverts automatically. 'true' forces "
+            "inversion (for white lines on dark background). 'false' forces no "
+            "inversion (for dark lines on light background)."
+        ),
     )
     parser.add_argument(
         "--width-scale",

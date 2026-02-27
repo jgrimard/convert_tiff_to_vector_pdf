@@ -44,9 +44,13 @@ Controls how the grayscale image is split into "ink" vs "background." Every pixe
 
 #### `--invert`
 
-A simple on/off flag (no value needed). Use this when your source TIFF has **white lines on a dark background** instead of the usual dark lines on a light background. When set, pixels *brighter* than the threshold are treated as ink rather than pixels darker than the threshold.
+Controls whether the image colors are inverted before processing. Accepts one of three values:
 
-- **Default:** off (dark ink on light background)
+- **`auto`** (default) — The script examines the image and counts the proportion of dark vs light pixels using the binarization threshold. If more than 50% of pixels are dark, it assumes the drawing has white lines on a dark background and automatically inverts. This is ideal for batch processing where input images may be a mix of normal and inverted drawings.
+- **`true`** — Forces inversion on. Use this to override auto-detection when you know your source TIFF has **white lines on a dark background**.
+- **`false`** — Forces inversion off. Use this to override auto-detection when you know your source TIFF has **dark lines on a light background**.
+
+- **Default:** `auto`
 
 #### `--width-scale`
 
