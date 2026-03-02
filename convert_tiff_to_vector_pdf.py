@@ -923,7 +923,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-width-px",
         type=float,
-        default=30.0,
+        default=80.0,
         help="Maximum output line width in source-image pixels.",
     )
     parser.add_argument(

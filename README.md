@@ -72,7 +72,7 @@ The minimum allowed stroke width, measured in source-image pixels. Any line thin
 
 The maximum allowed stroke width, measured in source-image pixels. Any line thicker than this value in the original image will be capped at this width. This prevents large filled regions from producing unreasonably wide strokes.
 
-- **Default:** `30.0` px
+- **Default:** `80.0` px
 - **Range:** any value `> 0` (must be ≥ `--min-width-px`)
 
 #### `--width-delta-px`
