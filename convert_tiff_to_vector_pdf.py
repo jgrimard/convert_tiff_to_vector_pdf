@@ -888,8 +888,21 @@ def parse_args() -> argparse.Namespace:
             "using skeleton centerlines and variable line width."
         )
     )
-    parser.add_argument("--input", required=True, type=Path, help="Path to input single-page TIFF.")
-    parser.add_argument("--output", required=True, type=Path, help="Path to output PDF.")
+    # Positional convenience arguments: input [output]
+    parser.add_argument(
+        "pos_input",
+        nargs="?",
+        type=Path,
+        help="Input TIFF path (positional alternative to --input).",
+    )
+    parser.add_argument(
+        "pos_output",
+        nargs="?",
+        type=Path,
+        help="Output PDF path (positional alternative to --output).",
+    )
+    parser.add_argument("--input", required=False, type=Path, help="Path to input single-page TIFF.")
+    parser.add_argument("--output", required=False, type=Path, help="Path to output PDF.")
     parser.add_argument(
         "--threshold",
         type=int,
@@ -957,6 +970,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _default_output_from_input(input_tiff: Path) -> Path:
+    """
+    Build default output path using the input's directory and stem,
+    appending '-vector.pdf'.
+
+    Example:
+        drawing.iTIFF -> drawing-vector.pdf
+    """
+    return input_tiff.with_name(f"{input_tiff.stem}-vector.pdf")
+
+
 # ---------------------------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------------------------
@@ -965,6 +989,19 @@ def main() -> None:
     Parse CLI arguments, validate them, and run the conversion pipeline.
     """
     args = parse_args()
+
+    # Resolve input/output from either named flags or positional arguments.
+    # Named flags take precedence when both forms are provided.
+    input_tiff = args.input if args.input is not None else args.pos_input
+    output_pdf = args.output if args.output is not None else args.pos_output
+
+    if input_tiff is None:
+        raise ValueError(
+            "Input TIFF is required. Provide it as --input <file> or as the first positional argument."
+        )
+
+    if output_pdf is None:
+        output_pdf = _default_output_from_input(input_tiff)
 
     # Remove Pillow's safety limit so very large TIFFs can be processed
     Image.MAX_IMAGE_PIXELS = None
@@ -989,8 +1026,8 @@ def main() -> None:
 
     # Run the full conversion pipeline
     path_runs = convert_tiff_to_vector_pdf(
-        input_tiff=args.input,
-        output_pdf=args.output,
+        input_tiff=input_tiff,
+        output_pdf=output_pdf,
         threshold=args.threshold,
         invert=args.invert,
         width_scale=args.width_scale,
@@ -1001,7 +1038,7 @@ def main() -> None:
         simplify_epsilon_px=args.simplify_epsilon_px,
         min_dpi=args.min_dpi,
     )
-    print(f"Generated {args.output} with {path_runs} connected stroked path runs.")
+    print(f"Generated {output_pdf} with {path_runs} connected stroked path runs.")
 
 
 # Only run main() when the script is executed directly,

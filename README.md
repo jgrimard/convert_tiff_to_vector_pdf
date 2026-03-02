@@ -35,6 +35,20 @@ python -m pip install -r requirements.txt
 python convert_tiff_to_vector_pdf.py --input 444924.tif --output 444924_vector.pdf
 ```
 
+You can also use positional arguments:
+
+```powershell
+python convert_tiff_to_vector_pdf.py 444924.tif 444924_vector.pdf
+```
+
+If you provide only the input path, output is created in the same folder using
+the same base name with `-vector.pdf` appended:
+
+```powershell
+python convert_tiff_to_vector_pdf.py 444924.tif
+# -> 444924-vector.pdf
+```
+
 ### Optional tuning parameters
 
 #### `--threshold`
@@ -109,6 +123,12 @@ PowerShell command with default options:
 
 ```powershell
 python convert_tiff_to_vector_pdf.py --input 444924.tif --output 444924_vector.pdf --width-delta-px 2.5 --min-run-nodes 40 --simplify-epsilon-px 0.8
+```
+
+Equivalent positional form:
+
+```powershell
+python convert_tiff_to_vector_pdf.py 444924.tif 444924_vector.pdf --width-delta-px 2.5 --min-run-nodes 40 --simplify-epsilon-px 0.8
 ```
 
 ## Notes
