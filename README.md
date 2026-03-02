@@ -1,6 +1,8 @@
 # Raster TIFF to Stroke-Only Vector PDF
 
-This project converts a black-and-white single-page raster TIFF into a vector PDF made from connected stroked centerlines with variable line thickness.
+This project converts a black-and-white raster TIFF into a vector PDF made from connected stroked centerlines with variable line thickness.
+
+Multi-page TIFFs are not currently supported.  However, multi-frame TIFFs (e.g. pyramid TIFFs with multiple resolutions of the same page) are supported — the script automatically selects the largest frame. Low-DPI images are upscaled in memory before processing to ensure quality results, while the output PDF retains the original physical dimensions (inches).
 
 The output is intentionally stroke-based. It does not generate filled outlines/shapes for linework.
 
@@ -94,6 +96,13 @@ Controls how aggressively the script simplifies the geometry of each centerline 
 - **Default:** `0.8` px
 - **Range:** any value `≥ 0` (`0` = no simplification)
 
+#### `--min-dpi`
+
+The minimum DPI (dots per inch) for processing. If the input TIFF has a DPI below this value on either axis, the image is upscaled in memory using bilinear interpolation before conversion begins. This ensures that skeletonization and line-width estimation produce good results even on low-resolution source files. The output PDF retains the original physical dimensions (inches) because the DPI and pixel counts are scaled together.
+
+- **Default:** `300.0`
+- **Range:** any value `> 0`
+
 Example:
 
 PowerShell command with default options:
@@ -104,6 +113,8 @@ python convert_tiff_to_vector_pdf.py --input 444924.tif --output 444924_vector.p
 
 ## Notes
 
-- Current scope is **single-page TIFF**.
-- Page size is derived from source pixel dimensions and TIFF DPI metadata.
+- Multi-page TIFFs are not supported.
+- Multi-frame TIFFs are supported: the script selects the frame with the most pixels (highest resolution).
+- Images below the minimum DPI (default 300) are automatically upscaled in memory before processing.
+- Page size is derived from source pixel dimensions and TIFF DPI metadata, so the output PDF matches the original physical dimensions.
 - Paths split at line junctions and major thickness transitions, producing connected multi-segment centerlines.

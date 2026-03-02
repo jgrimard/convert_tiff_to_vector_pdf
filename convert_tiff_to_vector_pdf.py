@@ -93,26 +93,40 @@ def _otsu_threshold(gray: np.ndarray) -> int:
 # ---------------------------------------------------------------------------
 # TIFF Loading
 # ---------------------------------------------------------------------------
-def _load_single_page_tiff(path: Path) -> tuple[np.ndarray, tuple[float, float]]:
+def _load_tiff(path: Path) -> tuple[np.ndarray, tuple[float, float]]:
     """
-    Open a TIFF file, verify it has exactly one page, read its DPI metadata,
-    and convert the image to an 8-bit grayscale NumPy array.
+    Open a TIFF file, select the largest frame (by pixel count), read its DPI
+    metadata, and convert the image to an 8-bit grayscale NumPy array.
+
+    Multi-frame TIFFs are not necessarily multi-page documents — they may
+    contain the same page stored at different resolutions (e.g. pyramid
+    TIFFs).  This function picks the frame with the highest resolution
+    (largest width * height) so the best-quality image is used for conversion.
 
     Parameters:
         path: Filesystem path to the input TIFF file.
 
     Returns:
         A tuple of (grayscale_array, (x_dpi, y_dpi)).
-
-    Raises:
-        ValueError: If the TIFF contains more than one page/frame.
     """
     with Image.open(path) as image:
-        # Check that the TIFF has only one page (multi-page TIFFs are not supported)
         n_frames = int(getattr(image, "n_frames", 1))
-        if n_frames != 1:
-            raise ValueError(
-                f"Input TIFF has {n_frames} pages. This script supports single-page TIFF only."
+
+        if n_frames > 1:
+            # Find the frame with the largest pixel count (best resolution)
+            best_frame = 0
+            best_pixels = 0
+            for frame_idx in range(n_frames):
+                image.seek(frame_idx)
+                pixel_count = image.size[0] * image.size[1]
+                if pixel_count > best_pixels:
+                    best_pixels = pixel_count
+                    best_frame = frame_idx
+            image.seek(best_frame)
+            print(
+                f"       TIFF has {n_frames} frames; using frame {best_frame} "
+                f"({image.size[0]}x{image.size[1]} px) as the largest.",
+                flush=True,
             )
 
         # Read DPI from TIFF metadata; default to 300 if missing or malformed
@@ -126,6 +140,60 @@ def _load_single_page_tiff(path: Path) -> tuple[np.ndarray, tuple[float, float]]
         gray = np.array(image.convert("L"), dtype=np.uint8)
 
     return gray, (x_dpi, y_dpi)
+
+
+# ---------------------------------------------------------------------------
+# DPI Upscaling
+# ---------------------------------------------------------------------------
+def _upscale_to_min_dpi(
+    gray: np.ndarray,
+    x_dpi: float,
+    y_dpi: float,
+    min_dpi: float,
+) -> tuple[np.ndarray, float, float]:
+    """
+    Upscale a grayscale image so that both axes meet a minimum DPI threshold.
+
+    If the image already meets or exceeds *min_dpi* on both axes, it is
+    returned unchanged.  Otherwise the image is resampled using bilinear
+    interpolation so that each axis reaches *min_dpi*.  The physical size
+    (in inches) is preserved because the DPI values are scaled by the same
+    factor as the pixel counts.
+
+    Parameters:
+        gray:    8-bit grayscale image array (H x W).
+        x_dpi:   Horizontal DPI of the source image.
+        y_dpi:   Vertical DPI of the source image.
+        min_dpi: Target minimum DPI. Axes already at or above this value
+                 are not modified.
+
+    Returns:
+        A tuple of (upscaled_gray, new_x_dpi, new_y_dpi).
+    """
+    scale_x = max(1.0, min_dpi / x_dpi)
+    scale_y = max(1.0, min_dpi / y_dpi)
+
+    if scale_x <= 1.0 and scale_y <= 1.0:
+        # Already at or above the minimum DPI on both axes
+        return gray, x_dpi, y_dpi
+
+    # scipy.ndimage.zoom axis order: (rows=Y, cols=X)
+    upscaled = ndimage.zoom(gray, (scale_y, scale_x), order=1)
+    # Ensure the result stays in uint8 range
+    upscaled = np.clip(upscaled, 0, 255).astype(np.uint8)
+
+    new_x_dpi = x_dpi * scale_x
+    new_y_dpi = y_dpi * scale_y
+
+    old_h, old_w = gray.shape
+    new_h, new_w = upscaled.shape
+    print(
+        f"       Upscaled from {old_w}x{old_h} px ({x_dpi:.0f}x{y_dpi:.0f} DPI) "
+        f"to {new_w}x{new_h} px ({new_x_dpi:.0f}x{new_y_dpi:.0f} DPI).",
+        flush=True,
+    )
+
+    return upscaled, new_x_dpi, new_y_dpi
 
 
 # ---------------------------------------------------------------------------
@@ -651,10 +719,11 @@ def convert_tiff_to_vector_pdf(
     width_delta_px: float,
     min_run_nodes: int,
     simplify_epsilon_px: float,
+    min_dpi: float,
 ) -> int:
     """
-    Full pipeline: load TIFF -> binarize -> skeletonize -> extract chains ->
-    simplify -> estimate widths -> render to PDF.
+    Full pipeline: load TIFF -> upscale if needed -> binarize -> skeletonize
+    -> extract chains -> simplify -> estimate widths -> render to PDF.
 
     Parameters:
         input_tiff:           Path to the source TIFF file.
@@ -668,6 +737,8 @@ def convert_tiff_to_vector_pdf(
         width_delta_px:       Width change threshold for splitting chains.
         min_run_nodes:        Minimum run length before a width-split is allowed.
         simplify_epsilon_px:  RDP simplification tolerance in pixels (0 to disable).
+        min_dpi:              Minimum DPI; images below this are upscaled in
+                              memory before processing (default 300).
 
     Returns:
         The total number of stroked path segments written to the PDF.
@@ -675,12 +746,20 @@ def convert_tiff_to_vector_pdf(
     pipeline_start = time.time()
 
     # --- Step 1: Load the TIFF and get its grayscale pixel data and DPI ---
-    t = _step("[1/7] Loading TIFF...")
-    gray, (x_dpi, y_dpi) = _load_single_page_tiff(input_tiff)
+    t = _step("[1/8] Loading TIFF...")
+    gray, (x_dpi, y_dpi) = _load_tiff(input_tiff)
     _done(t)
 
-    # --- Step 2: Binarize the grayscale image into an ink mask ---
-    t = _step("[2/7] Binarizing...")
+    # --- Step 2: Upscale the image if its DPI is below the minimum ---
+    # Low-DPI images produce poor skeletonization results.  Upscaling in
+    # memory improves quality while keeping the output PDF at the original
+    # physical size (inches), because the DPI is scaled by the same factor.
+    t = _step("[2/8] Checking DPI...")
+    gray, x_dpi, y_dpi = _upscale_to_min_dpi(gray, x_dpi, y_dpi, min_dpi)
+    _done(t)
+
+    # --- Step 3: Binarize the grayscale image into an ink mask ---
+    t = _step("[3/8] Binarizing...")
     # Resolve the invert setting: auto-detect based on dark/light pixel ratio,
     # or use the explicit true/false override provided by the user.
     use_threshold = _otsu_threshold(gray) if threshold is None else int(threshold)
@@ -694,30 +773,30 @@ def convert_tiff_to_vector_pdf(
     if not np.any(ink):
         raise ValueError("No black line pixels detected after thresholding.")
 
-    # --- Step 3: Skeletonize the binary mask to 1-pixel-wide centerlines ---
+    # --- Step 4: Skeletonize the binary mask to 1-pixel-wide centerlines ---
     # Skeletonization erodes thick lines down to their medial axis.
-    t = _step("[3/7] Skeletonizing...")
+    t = _step("[4/8] Skeletonizing...")
     skel = skeletonize(ink)
     _done(t)
     if not np.any(skel):
         raise ValueError("Skeletonization produced no centerlines.")
 
-    # --- Step 4: Build a distance-transform map for line-width estimation ---
+    # --- Step 5: Build a distance-transform map for line-width estimation ---
     # For every ink pixel, dist_map stores the Euclidean distance to the nearest
     # background pixel.  At skeleton pixels this equals the inscribed circle radius.
-    t = _step("[4/7] Computing distance transform...")
+    t = _step("[5/8] Computing distance transform...")
     dist_map = ndimage.distance_transform_edt(ink)
     _done(t)
 
-    # --- Step 5: Convert the skeleton into a graph and extract chains ---
-    t = _step("[5/7] Building skeleton graph...")
+    # --- Step 6: Convert the skeleton into a graph and extract chains ---
+    t = _step("[6/8] Building skeleton graph...")
     adjacency = _build_skeleton_graph(skel)
     chains = _extract_chains(adjacency)
     _done(t)
     print(f"       Found {len(chains)} chains.")
 
-    # --- Step 6: Set up the PDF canvas with the same physical dimensions ---
-    t = _step("[6/7] Setting up PDF canvas...")
+    # --- Step 7: Set up the PDF canvas with the same physical dimensions ---
+    t = _step("[7/8] Setting up PDF canvas...")
     height_px, width_px = gray.shape
     # Convert image dimensions from pixels to PDF points (1 point = 1/72 inch)
     page_w_pt = _px_to_pt(float(width_px), x_dpi)
@@ -736,8 +815,8 @@ def convert_tiff_to_vector_pdf(
     path_count = 0
     avg_dpi = (x_dpi + y_dpi) / 2.0  # used for width conversion when x/y DPI differ
 
-    # --- Step 7: Process each chain and render it as stroked PDF path(s) ---
-    print("[7/7] Rendering chains to PDF...")
+    # --- Step 8: Process each chain and render it as stroked PDF path(s) ---
+    print("[8/8] Rendering chains to PDF...")
     chain_start = time.time()
     total_chains = len(chains)
     for chain_idx, chain in enumerate(chains, 1):
@@ -865,6 +944,16 @@ def parse_args() -> argparse.Namespace:
         default=0.8,
         help="Mild polyline simplification tolerance in pixels; 0 disables simplification.",
     )
+    parser.add_argument(
+        "--min-dpi",
+        type=float,
+        default=300.0,
+        help=(
+            "Minimum DPI for processing. Images below this DPI are upscaled "
+            "in memory before conversion to improve quality. The output PDF "
+            "retains the original physical dimensions (inches). Default: 300."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -895,6 +984,8 @@ def main() -> None:
         raise ValueError("--min-run-nodes must be >= 2")
     if args.simplify_epsilon_px < 0:
         raise ValueError("--simplify-epsilon-px must be >= 0")
+    if args.min_dpi <= 0:
+        raise ValueError("--min-dpi must be > 0")
 
     # Run the full conversion pipeline
     path_runs = convert_tiff_to_vector_pdf(
@@ -908,6 +999,7 @@ def main() -> None:
         width_delta_px=args.width_delta_px,
         min_run_nodes=args.min_run_nodes,
         simplify_epsilon_px=args.simplify_epsilon_px,
+        min_dpi=args.min_dpi,
     )
     print(f"Generated {args.output} with {path_runs} connected stroked path runs.")
 
