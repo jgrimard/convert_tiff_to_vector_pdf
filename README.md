@@ -117,6 +117,21 @@ The minimum DPI (dots per inch) for processing. If the input TIFF has a DPI belo
 - **Default:** `300.0`
 - **Range:** any value `> 0`
 
+#### `--blur-radius`
+
+Applies a Gaussian blur to the grayscale image **before** binarization. This is designed for dithered (1-bit) TIFF images where lines are sometimes represented as patterns of dots with spaces between them (Dithering). Without blurring, such patterns cause the vectorizer to produce many tiny disconnected line segments or small spurious lines branching off of straight lines. The blur spreads each dot into its neighbors, merging nearby dots into solid, continuous regions that binarize cleanly.
+
+The value is the **sigma** (standard deviation) of the Gaussian kernel, measured in pixels. Larger values produce stronger smoothing.
+
+- **Default:** disabled (no blur)
+- **Range:** any value `> 0` (typical values: `0.5` - `2.0`)
+
+| Sigma | Effect |
+|-------|--------|
+| `0.5` | Light smoothing — merges closely spaced dots while preserving fine detail. |
+| `1.0` | Moderate smoothing — good starting point for most dithered drawings. |
+| `2.0` | Heavy smoothing — fills larger gaps but may round sharp corners. |
+
 Example:
 
 PowerShell command with default options:

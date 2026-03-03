@@ -107,7 +107,7 @@ def _load_tiff(path: Path) -> tuple[np.ndarray, tuple[float, float]]:
         path: Filesystem path to the input TIFF file.
 
     Returns:
-        A tuple of (grayscale_array, (x_dpi, y_dpi)).
+        A tuple of (grayscale_array, (x_dpi, y_dpi)
     """
     with Image.open(path) as image:
         n_frames = int(getattr(image, "n_frames", 1))
@@ -720,6 +720,7 @@ def convert_tiff_to_vector_pdf(
     min_run_nodes: int,
     simplify_epsilon_px: float,
     min_dpi: float,
+    blur_radius: float | None,
 ) -> int:
     """
     Full pipeline: load TIFF -> upscale if needed -> binarize -> skeletonize
@@ -739,6 +740,9 @@ def convert_tiff_to_vector_pdf(
         simplify_epsilon_px:  RDP simplification tolerance in pixels (0 to disable).
         min_dpi:              Minimum DPI; images below this are upscaled in
                               memory before processing (default 300).
+        blur_radius:          Gaussian blur sigma to apply before binarization.
+                              Useful for dithered (1-bit) images whose lines
+                              appear as dot patterns with gaps.  None to skip.
 
     Returns:
         The total number of stroked path segments written to the PDF.
@@ -757,6 +761,19 @@ def convert_tiff_to_vector_pdf(
     t = _step("[2/8] Checking DPI...")
     gray, x_dpi, y_dpi = _upscale_to_min_dpi(gray, x_dpi, y_dpi, min_dpi)
     _done(t)
+
+    # --- Step 2b (optional): Apply Gaussian blur for dithered images ---
+    # Dithered (1-bit) images often represent lines as patterns of dots with
+    # gaps.  A Gaussian blur spreads each dot into its neighbors, producing a
+    # smooth grayscale image that binarizes into solid line work instead of
+    # fragmented segments.  If the source image was pure black-and-white
+    # (PIL mode "1"), it was already converted to 8-bit grayscale ("L") in
+    # step 1, so the blur operates on a full 0-255 range.
+    if blur_radius is not None:
+        t = _step(f"[2b/8] Applying Gaussian blur (sigma={blur_radius:.2f})...")
+        gray = ndimage.gaussian_filter(gray.astype(np.float64), sigma=blur_radius)
+        gray = np.clip(gray, 0, 255).astype(np.uint8)
+        _done(t)
 
     # --- Step 3: Binarize the grayscale image into an ink mask ---
     t = _step("[3/8] Binarizing...")
@@ -967,6 +984,17 @@ def parse_args() -> argparse.Namespace:
             "retains the original physical dimensions (inches). Default: 300."
         ),
     )
+    parser.add_argument(
+        "--blur-radius",
+        type=float,
+        default=None,
+        help=(
+            "Apply a Gaussian blur before binarization to merge dithered dot "
+            "patterns into solid lines. The value is the blur sigma (standard "
+            "deviation) in pixels; typical range is 0.5-2.0. Larger values "
+            "produce more smoothing. Omit to skip blurring."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1023,6 +1051,8 @@ def main() -> None:
         raise ValueError("--simplify-epsilon-px must be >= 0")
     if args.min_dpi <= 0:
         raise ValueError("--min-dpi must be > 0")
+    if args.blur_radius is not None and args.blur_radius <= 0:
+        raise ValueError("--blur-radius must be > 0")
 
     # Run the full conversion pipeline
     path_runs = convert_tiff_to_vector_pdf(
@@ -1037,6 +1067,7 @@ def main() -> None:
         min_run_nodes=args.min_run_nodes,
         simplify_epsilon_px=args.simplify_epsilon_px,
         min_dpi=args.min_dpi,
+        blur_radius=args.blur_radius,
     )
     print(f"Generated {output_pdf} with {path_runs} connected stroked path runs.")
 
